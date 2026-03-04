@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Animation 3D - Attracteur de Lorenz</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+        #info {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: rgba(255, 255, 255, 0.8);
+            pointer-events: none;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+            background: rgba(0, 0, 0, 0.5);
+            padding: 15px;
+            border-radius: 8px;
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        h1 {
+            margin: 0 0 5px 0;
+            font-size: 1.2rem;
+            color: #fff;
+        }
+        p {
+            margin: 0;
+            font-size: 0.9rem;
+            color: #ccc;
+        }
+        /* .controls-hint {
+            margin-top: 10px;
+            font-size: 0.8rem;
+            color: #aaa;
+            font-style: italic;
+        } */
+    </style>
+    <!-- Chargement de Three.js et OrbitControls -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <!-- Scripts nécessaires pour le post-processing (Bloom/Glow) -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+</head>
+<body>
+    <!-- <div id="info">
+        <h1>Attracteur de Lorenz</h1>
+        <p>dx/dt = σ(y - x)</p>
+        <p>dy/dt = x(ρ - z) - y</p>
+        <p>dz/dt = xy - βz</p>
+        <p class="controls-hint">Clic gauche: Tourner | Molette: Zoomer</p>
+    </div> -->
+
+    <script>
+        window.onload = function() {
+            // Configuration de la scène
+            const scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x000000, 0.005);
+
+            // Configuration de la caméra
+            const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 0, 90);
+
+            // Configuration du rendu
+            const renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.toneMapping = THREE.ReinhardToneMapping; // Améliore le rendu des lumières intenses
+            document.body.appendChild(renderer.domElement);
+
+            // Post-processing : Effet Glowing (Bloom) un peu plus large
+            const renderScene = new THREE.RenderPass(scene, camera);
+            const bloomPass = new THREE.UnrealBloomPass(
+                new THREE.Vector2(window.innerWidth, window.innerHeight),
+                3.0,  // Force du glow (augmentée pour un effet plus intense)
+                0.8,  // Rayon du glow (augmenté pour s'étaler davantage)
+                0.0   // Seuil (tout brille)
+            );
+
+            const composer = new THREE.EffectComposer(renderer);
+            composer.addPass(renderScene);
+            composer.addPass(bloomPass);
+
+            // Contrôles interactifs pour orbiter autour de la forme
+            const controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.autoRotate = true;
+            controls.autoRotateSpeed = 1.0;
+            controls.enableZoom = false;    // Bloquer le zoom
+            controls.enablePan = false;     // Bloquer le panoramique
+            controls.enableRotate = false;  // Bloquer la rotation manuelle
+
+            // Paramètres de l'attracteur de Lorenz
+            let x = 0.01;
+            let y = 0;
+            let z = 0;
+
+            // Constantes classiques
+            const sigma = 10;
+            const rho = 28;
+            const beta = 8 / 3;
+            const dt = 0.005; // Pas de temps
+
+            // Taille de la fenêtre glissante (les 1500 derniers points)
+            const maxWindow = 1500; 
+            let currentPoints = 0;
+
+            // Préparation de la géométrie
+            const positions = new Float32Array(maxWindow * 3);
+            const colors = new Float32Array(maxWindow * 3);
+
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            geometry.setDrawRange(0, 0);
+
+            // Matériau de la ligne pour lier la trajectoire
+            const lineMaterial = new THREE.LineBasicMaterial({
+                vertexColors: true,
+                blending: THREE.AdditiveBlending,
+                transparent: true,
+                opacity: 0.6
+            });
+
+            // --- NOUVEAU : Création d'une texture circulaire adoucie ---
+            const canvasTexture = document.createElement('canvas');
+            canvasTexture.width = 64;
+            canvasTexture.height = 64;
+            const ctx = canvasTexture.getContext('2d');
+            
+            // On dessine un dégradé radial (blanc au centre, transparent sur les bords)
+            const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+            gradient.addColorStop(0, 'rgba(255,255,255,1)');
+            gradient.addColorStop(1, 'rgba(255,255,255,0)');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, 64, 64);
+            
+            const circleTexture = new THREE.CanvasTexture(canvasTexture);
+            // -------------------------------------------------------------
+
+            // Matériau de points pour donner de l'épaisseur physique au trait
+            const pointsMaterial = new THREE.PointsMaterial({
+                size: 3.0, // Taille légèrement augmentée car les bords du cercle sont adoucis
+                vertexColors: true,
+                blending: THREE.AdditiveBlending,
+                transparent: true,
+                opacity: 0.9,
+                sizeAttenuation: true,
+                map: circleTexture,    // On applique la texture ronde
+                depthWrite: false      // Important : évite les artefacts de superposition entre les cercles transparents
+            });
+
+            // Création des objets combinés
+            const line = new THREE.Line(geometry, lineMaterial);
+            const points = new THREE.Points(geometry, pointsMaterial);
+            
+            // On regroupe la ligne et les points pour les déplacer ensemble
+            const attractorGroup = new THREE.Group();
+            attractorGroup.add(line);
+            attractorGroup.add(points);
+            attractorGroup.position.z = -24; // Centrage
+            scene.add(attractorGroup);
+
+            // Variables de couleurs
+            const baseColor = new THREE.Color(0xe63312); // Rouge Inria
+
+            // Vitesse d'apparition (points calculés par image)
+            const stepsPerFrame = 15;
+
+            // Boucle d'animation principale
+            function animate() {
+                requestAnimationFrame(animate);
+
+                for (let i = 0; i < stepsPerFrame; i++) {
+                    // Équations différentielles de Lorenz
+                    const dx = (sigma * (y - x)) * dt;
+                    const dy = (x * (rho - z) - y) * dt;
+                    const dz = (x * y - beta * z) * dt;
+
+                    x += dx;
+                    y += dy;
+                    z += dz;
+
+                    if (currentPoints < maxWindow) {
+                        // Remplissage initial de la fenêtre
+                        positions[currentPoints * 3] = x;
+                        positions[currentPoints * 3 + 1] = y;
+                        positions[currentPoints * 3 + 2] = z;
+
+                        currentPoints++;
+                    } else {
+                        // Fenêtre pleine : on décale tout vers la gauche avec copyWithin
+                        positions.copyWithin(0, 3);
+
+                        // Et on ajoute le nouveau point tout à la fin
+                        const lastIdx = (maxWindow - 1) * 3;
+                        positions[lastIdx] = x;
+                        positions[lastIdx + 1] = y;
+                        positions[lastIdx + 2] = z;
+                    }
+                }
+
+                // Mise à jour des couleurs pour créer un dégradé (traînée lumineuse)
+                for (let i = 0; i < currentPoints; i++) {
+                    const ratio = i / (currentPoints - 1 || 1);
+                    // Math.pow accentue l'effet : la tête est incandescente, la queue s'estompe
+                    const intensity = Math.pow(ratio, 2.5); 
+                    
+                    colors[i * 3] = baseColor.r * intensity;
+                    colors[i * 3 + 1] = baseColor.g * intensity;
+                    colors[i * 3 + 2] = baseColor.b * intensity;
+                }
+
+                // Informer Three.js que la géométrie partagée a changé
+                geometry.attributes.position.needsUpdate = true;
+                geometry.attributes.color.needsUpdate = true;
+                
+                // Mettre à jour la plage d'affichage
+                geometry.setDrawRange(0, currentPoints);
+
+                // Mettre à jour les contrôles
+                controls.update();
+
+                // Effectuer le rendu de la scène via le Composer
+                composer.render();
+            }
+
+            // Démarrer l'animation
+            animate();
+
+            // Gestion du redimensionnement de la fenêtre
+            window.addEventListener('resize', onWindowResize, false);
+
+            function onWindowResize() {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                composer.setSize(window.innerWidth, window.innerHeight);
+            }
+        };
+    </script>
+</body>
+</html>
