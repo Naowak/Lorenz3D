@@ -1,7 +1,7 @@
 # Lorenz3D
 3D Visualization of Lorenz in ThreeJS.
 
-https://github.com/user-attachments/assets/2c4a0541-77a1-460e-9d59-7929fe10e4e9
+https://github.com/user-attachments/assets/4e6698a2-a1ba-4f78-abcb-1f4aac0793fa
 
 
 
